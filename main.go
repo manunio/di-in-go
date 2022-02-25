@@ -3,25 +3,37 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"log"
 	"net/http"
+
+	_ "github.com/mattn/go-sqlite3"
+	"go.uber.org/dig"
 )
 
 func main() {
-	config := NewConfig()
+	container := BuildContainer()
 
-	db, err := ConnectDatabase(config)
+	err := container.Invoke(func(server *Server) {
+		log.Println("Runnig server..")
+		server.Run()
+	})
 
 	if err != nil {
 		panic(err)
 	}
+}
 
-	personRepository := NewPersonRepository(db)
+func BuildContainer() *dig.Container {
+	container := dig.New()
 
-	personService := NewPersonService(config, personRepository)
+	container.Provide(NewConfig)
+	container.Provide(ConnectDatabase)
+	container.Provide(NewPersonRepository)
+	container.Provide(NewPersonService)
+	container.Provide(NewServer)
 
-	server := NewServer(config, personService)
-
-	server.Run()
+	return container
 }
 
 // Person  ..
@@ -59,7 +71,12 @@ type PersonRepository struct {
 
 // FindAll ..
 func (p *PersonRepository) FindAll() []*Person {
-	rows, _ := p.database.Query(`SELECT id, name, age FROM people`)
+	rows, _ := p.database.Query(`SELECT id, name, age FROM people;`)
+
+	if rows == nil {
+		panic(errors.New("rows are empty"))
+	}
+
 	defer rows.Close()
 
 	people := []*Person{}
@@ -121,6 +138,7 @@ type Server struct {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
+	log.Println("route: [/people]")
 	mux.HandleFunc("/people", s.people)
 
 	return mux
@@ -133,7 +151,9 @@ func (s *Server) Run() {
 		Handler: s.Handler(),
 	}
 
-	httpServer.ListenAndServe()
+	if err := httpServer.ListenAndServe(); err != nil {
+		panic(err)
+	}
 }
 
 func (s *Server) people(w http.ResponseWriter, r *http.Request) {
